@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Longwave — set a radio clock from your screen</title>
+<style>
+  :root {
+    --ink: #e8e4d9;
+    --ink-dim: #948d7c;
+    --panel: #14120f;
+    --panel-raised: #1c1a15;
+    --amber: #e8a33d;
+    --amber-dim: #7a5a26;
+    --line: #2c2820;
+    --mono: 'IBM Plex Mono', 'SF Mono', 'Consolas', monospace;
+    --serif: 'IBM Plex Serif', Georgia, serif;
+  }
+  @font-face {
+    font-family: 'IBM Plex Mono';
+    src: local('IBM Plex Mono');
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: #0a0906;
+    color: var(--ink);
+    font-family: var(--mono);
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: clamp(20px, 4vw, 56px) 20px 80px;
+  }
+
+  .masthead {
+    width: 100%;
+    max-width: 720px;
+    margin-bottom: 28px;
+  }
+  .masthead .dial {
+    font-family: var(--serif);
+    font-size: clamp(28px, 5vw, 40px);
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    margin: 0 0 6px;
+    font-weight: 500;
+  }
+  .masthead .dial em {
+    font-style: normal;
+    color: var(--amber);
+  }
+  .masthead p {
+    margin: 0;
+    color: var(--ink-dim);
+    font-size: 14px;
+    line-height: 1.6;
+    max-width: 58ch;
+  }
+
+  .panel {
+    width: 100%;
+    max-width: 720px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+
+  .stations {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .station {
+    background: var(--panel-raised);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 14px 12px;
+    cursor: pointer;
+    text-align: left;
+    color: var(--ink);
+    font-family: var(--mono);
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .station:hover { border-color: var(--amber-dim); }
+  .station.selected {
+    border-color: var(--amber);
+    background: #201a0f;
+  }
+  .station .call {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .station .khz {
+    display: block;
+    color: var(--ink-dim);
+    font-size: 12px;
+    margin-top: 4px;
+  }
+  .station .region {
+    display: block;
+    color: var(--ink-dim);
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  .divider {
+    height: 1px;
+    background: var(--line);
+    margin: 20px 0;
+  }
+
+  .readout {
+    font-size: 13px;
+    line-height: 1.9;
+    color: var(--ink-dim);
+  }
+  .readout .row {
+    display: flex;
+    justify-content: space-between;
+    border-bottom: 1px dotted var(--line);
+    padding: 3px 0;
+  }
+  .readout .row span:first-child { color: var(--ink-dim); }
+  .readout .row span:last-child { color: var(--ink); }
+
+  .go-button {
+    width: 100%;
+    margin-top: 20px;
+    padding: 16px;
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    background: var(--amber);
+    color: #1a1204;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: filter 0.15s ease;
+  }
+  .go-button:hover { filter: brightness(1.08); }
+  .go-button:disabled {
+    background: var(--panel-raised);
+    color: var(--ink-dim);
+    cursor: not-allowed;
+  }
+
+  .notes {
+    width: 100%;
+    max-width: 720px;
+    color: var(--ink-dim);
+    font-size: 12.5px;
+    line-height: 1.75;
+  }
+  .notes h2 {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 15px;
+    color: var(--ink);
+    margin: 24px 0 8px;
+  }
+  .notes h2:first-child { margin-top: 0; }
+  .notes ul { margin: 6px 0; padding-left: 20px; }
+  .notes li { margin-bottom: 5px; }
+  .notes code {
+    background: var(--panel-raised);
+    padding: 1px 5px;
+    border-radius: 2px;
+    color: var(--amber);
+  }
+
+  /* Transmission overlay */
+  #tx-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    display: none;
+    background: #000;
+  }
+  #tx-overlay.active { display: block; }
+  #tx-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  #tx-hud {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    padding: 18px 22px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: rgba(232,228,217,0.55);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    pointer-events: none;
+    mix-blend-mode: difference;
+  }
+  #tx-hud .stop-hint {
+    pointer-events: auto;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.25);
+    color: #fff;
+    padding: 8px 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  @media (max-width: 480px) {
+    .stations { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+  <div class="masthead">
+    <h1 class="dial">Long<em>wave</em></h1>
+    <p>
+      Flashes your screen with the same on/off timing that DCF77, MSF, WWVB, JJY, and BPC
+      broadcast over radio, so a nearby radio-controlled clock can read it as if the
+      transmitter were on. Useful if the station you rely on is down, out of range, or if
+      your clock only ever syncs itself and has no manual time-set button.
+    </p>
+  </div>
+
+  <div class="panel">
+    <div class="stations" id="station-grid"></div>
+
+    <div class="divider"></div>
+
+    <div class="readout" id="readout"></div>
+
+    <button class="go-button" id="go-button" disabled>Select a station to begin</button>
+  </div>
+
+  <div class="notes">
+    <h2>Placement</h2>
+    <ul>
+      <li>Set your clock to whichever mode makes it actively listen for a signal (usually a "search" or long-press-set button — check its manual).</li>
+      <li>Turn your screen brightness all the way up and dim the room if you can.</li>
+      <li>Hold the clock's antenna side flat against the screen, roughly centered. Most clocks sense along one edge or the back — try a couple of positions if the first doesn't take.</li>
+      <li>Reception depends heavily on the specific screen and clock. LCD/LED panels vary a lot; there's no guarantee for any given pair.</li>
+      <li>A full sync usually needs at least one full minute (BPC repeats every 20 seconds). Leave it running for a few minutes.</li>
+    </ul>
+
+    <h2>What's actually being sent</h2>
+    <ul>
+      <li><strong>DCF77</strong> (Germany, 77.5 kHz) — local Berlin time, automatically in CET or CEST.</li>
+      <li><strong>MSF</strong> (UK, 60 kHz) — local London time, automatically in GMT or BST.</li>
+      <li><strong>WWVB</strong> (USA, 60 kHz) — UTC, as the station itself transmits (most WWVB clocks apply their own configured timezone/DST offset after receiving this).</li>
+      <li><strong>JJY</strong> (Japan, 40/60 kHz) — Japan Standard Time (no daylight saving).</li>
+      <li><strong>BPC</strong> (China, 68.5 kHz) — China Standard Time (no daylight saving). BPC's exact bit format has never been officially published; this encoding follows the community reverse-engineering that's publicly available and has been checked against a real captured sample, but treat it as less certain than the other four.</li>
+    </ul>
+
+    <h2>Why this can work at all</h2>
+    <p>
+      These clocks don't receive real 77.5 kHz–162 kHz radio through your screen — screens can't
+      transmit at those frequencies on purpose. What actually reaches the clock is unintentional
+      electromagnetic and optical leakage from the display switching on and off at the right
+      moments, close enough for the clock's receiver to mistake it for its usual signal. It's the
+      same principle an old 2003 tool used for DCF77 on CRT monitors; this app applies it more
+      broadly and adds the timezone/DST handling needed to get the right local time onto each
+      format automatically, based on your computer's clock.
+    </p>
+  </div>
+
+  <div id="tx-overlay">
+    <canvas id="tx-canvas"></canvas>
+    <div id="tx-hud">
+      <span id="tx-status">—</span>
+      <button class="stop-hint" id="tx-stop">Stop (Esc)</button>
+    </div>
+  </div>
+
+<script src="protocols.js"></script>
+<script src="flicker.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const STATIONS = [
+    { id: 'dcf77', call: 'DCF77', khz: '77.5 kHz', region: 'Germany / Europe', encode: TimeCodeProtocols.encodeDCF77 },
+    { id: 'msf',   call: 'MSF',   khz: '60 kHz',   region: 'UK', encode: TimeCodeProtocols.encodeMSF },
+    { id: 'wwvb',  call: 'WWVB',  khz: '60 kHz',   region: 'USA', encode: TimeCodeProtocols.encodeWWVB },
+    { id: 'jjy',   call: 'JJY',   khz: '40/60 kHz',region: 'Japan', encode: TimeCodeProtocols.encodeJJY },
+    { id: 'bpc',   call: 'BPC',   khz: '68.5 kHz', region: 'China', encode: TimeCodeProtocols.encodeBPC }
+  ];
+
+  let selected = null;
+  const grid = document.getElementById('station-grid');
+  const readout = document.getElementById('readout');
+  const goButton = document.getElementById('go-button');
+  const overlay = document.getElementById('tx-overlay');
+  const canvas = document.getElementById('tx-canvas');
+  const statusEl = document.getElementById('tx-status');
+  const stopBtn = document.getElementById('tx-stop');
+
+  STATIONS.forEach((s) => {
+    const btn = document.createElement('button');
+    btn.className = 'station';
+    btn.innerHTML = `<span class="call">${s.call}</span><span class="khz">${s.khz}</span><span class="region">${s.region}</span>`;
+    btn.addEventListener('click', () => selectStation(s));
+    btn.dataset.id = s.id;
+    grid.appendChild(btn);
+  });
+
+  function selectStation(s) {
+    selected = s;
+    Array.from(grid.children).forEach((el) => el.classList.toggle('selected', el.dataset.id === s.id));
+    goButton.disabled = false;
+    goButton.textContent = `Begin transmitting ${s.call}`;
+    updateReadout();
+  }
+
+  function updateReadout() {
+    if (!selected) { readout.innerHTML = ''; return; }
+    const frame = selected.encode(new Date());
+    readout.innerHTML = `
+      <div class="row"><span>Station</span><span>${frame.name} — ${frame.carrierHz.toLocaleString()} Hz</span></div>
+      <div class="row"><span>Frame length</span><span>${frame.frameLengthSeconds}s</span></div>
+      <div class="row"><span>Current frame</span><span>${escapeHtml(frame.summaryLine)}</span></div>
+    `;
+  }
+
+  setInterval(updateReadout, 1000);
+
+  let engine = null;
+
+  function startTransmission() {
+    if (!selected) return;
+    overlay.classList.add('active');
+    document.body.style.overflow = 'hidden';
+    if (canvas.requestFullscreen) {
+      canvas.requestFullscreen().catch(() => {});
+    }
+    engine = TimeCodeFlicker.createFlickerEngine(
+      canvas,
+      selected.encode,
+      (frame, secIdx) => {
+        statusEl.textContent = `${frame.name}  ·  second ${secIdx + 1}/${frame.frameLengthSeconds}  ·  ${frame.summaryLine}`;
+      }
+    );
+    engine.start();
+  }
+
+  function stopTransmission() {
+    if (engine) { engine.stop(); engine = null; }
+    overlay.classList.remove('active');
+    document.body.style.overflow = '';
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+  }
+
+  goButton.addEventListener('click', startTransmission);
+  stopBtn.addEventListener('click', stopTransmission);
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && overlay.classList.contains('active')) stopTransmission();
+  });
+  overlay.addEventListener('dblclick', stopTransmission);
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+})();
+</script>
+</body>
+</html>
