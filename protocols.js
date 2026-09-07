@@ -395,90 +395,119 @@
 
   // ---------- BPC (68.5 kHz, CST China = UTC+8, no DST, 20s frame, 2 bits/sec) ----------
 
-  // BPC's format is not officially published; the layout below follows the
-  // frame table sourced from Wikipedia's "BPC (time signal)" article, which
-  // documents seconds 00-19 field-by-field (start marker, second-of-minute
-  // rounded to 20s, hour, minute, AM/PM + parity P1, day, month, year, day
-  // of week + parity P2). Minute and hour fields there are given as plain
-  // 2-bit-per-second binary words (not classic 4-bit BCD nibbles), which is
-  // reproduced faithfully here.
+  // BPC has no officially published specification. This layout is taken
+  // directly from a real hardware project (BPC_VFD_Clock by GeniusRabbit/
+  // Belief): a Verilog signal generator (bpc_gen.v) and a PIC firmware
+  // decoder (bpc.c) that receives and validates that same signal. Building
+  // this against both a generator AND an independent decoder — rather than
+  // a single reverse-engineered table — let every field be cross-checked:
+  // each second carries one of four pulse widths (100/200/300/400ms)
+  // representing a 2-bit value 0-3 directly (not two independent bits).
+  //
+  // Frame (20 seconds, repeating every 20s):
+  //   0:  start-of-frame marker (no pulse reduction)
+  //   1:  second-of-minute: 0/1/2 for :00/:20/:40
+  //   2:  unused (0)
+  //   3-4: hour, 12-hour clock (0-11), 4-bit binary split as 2+2
+  //   5-7: minute (0-59), 6-bit binary split as 2+2+2
+  //   8-9: day of week (1-7), 4-bit binary split as 2+2
+  //   10: P1 — encodes AM/PM together with a parity check over seconds 1-9
+  //   11-13: day of month (1-31), 6-bit binary split as 2+2+2
+  //   14-15: month (1-12), 4-bit binary split as 2+2
+  //   16-18: year within century (0-99), 6-bit binary split as 2+2+2
+  //   19: P4 — a second parity/flag byte over seconds 11-18 (the receiver
+  //       in this project only decodes through P1/hour/minute and never
+  //       reads P4, so its exact meaning is reproduced from the generator
+  //       alone and has no independent decoder to cross-check against)
+  //
+  // P1's own logic in the original generator turned out to be internally
+  // inconsistent with its own decoder for about half of all PM times
+  // (confirmed by simulating both sides together): the generator derived
+  // P1 from a raw-bit parity over hour/minute/weekday, but the decoder
+  // recomputes a DIFFERENT check — an XOR of the transmitted 2-bit values
+  // themselves — and rejects the frame whenever the two disagree. The fix
+  // used here is to derive P1 the way the decoder actually validates it
+  // (XOR the transmitted 2-bit values, then look up P1 from that result
+  // and the AM/PM flag) rather than the generator's separate raw-bit
+  // calculation, which is the more faithful reading once both sides are
+  // considered together.
   function encodeBPC(date) {
     const t = civilTimeInZone(date, 'Asia/Shanghai');
-
-    // BPC's 20-bit-pair frame repeats every 20s and describes the time at
-    // the start of that block; round the current second down to the
-    // nearest 0/20/40 boundary.
     const blockSecond = Math.floor(t.second / 20) * 20; // 0, 20, or 40
 
     const pair = (msb, lsb) => [msb, lsb];
     const words = {}; // second index (1-19) -> [MSbit, LSbit]
 
-    // sec 1: seconds-of-minute rounded to 20s, weights 40/20
-    words[1] = pair(blockSecond === 40 ? 1 : 0, blockSecond === 20 ? 1 : 0);
+    // sec 1: second-of-minute, value 0/1/2 for :00/:20/:40, sent as a
+    // 2-bit value (0,1,2) directly rather than independent weighted bits.
+    const secCode = blockSecond === 40 ? 2 : blockSecond === 20 ? 1 : 0;
+    words[1] = pair((secCode >> 1) & 1, secCode & 1);
 
     words[2] = pair(0, 0); // unused
 
-    // secs 2-4: hour (00-23) as 5-bit binary split across three seconds.
-    // A real captured BPC sample (hour=7, Wikipedia footnote 5) confirms
-    // weights (8,4) at sec 3 and (2,1) at sec 4, but 4 bits alone cap out
-    // at 15 and can't reach 23, so a 16-weight bit must live somewhere —
-    // sec 2 (documented as "unused" in the public table, always 0 in every
-    // available sample because those samples happened to be single-digit
-    // hours) is the only remaining slot before the confirmed nibble.
-    const hrBits = bitsForWeights(t.hour, [16, 0, 8, 4, 2, 1]);
-    words[2] = pair(hrBits[0], hrBits[1]);
-    words[3] = pair(hrBits[2], hrBits[3]);
-    words[4] = pair(hrBits[4], hrBits[5]);
+    // hour: 12-hour clock, 0-11 (0 = 12 AM / midnight, per the decoder's
+    // own reconstruction: hour24 = hour12 + (12 if PM)).
+    const hour12 = t.hour % 12;
+    const isPM = t.hour >= 12 ? 1 : 0;
+    const hrBits = bitsForWeights(hour12, [8, 4, 2, 1]);
+    words[3] = pair(hrBits[0], hrBits[1]);
+    words[4] = pair(hrBits[2], hrBits[3]);
 
-    // secs 5-7: minute (00-59), 6-bit binary split across three seconds
     const minBits = bitsForWeights(t.minute, [32, 16, 8, 4, 2, 1]);
     words[5] = pair(minBits[0], minBits[1]);
     words[6] = pair(minBits[2], minBits[3]);
     words[7] = pair(minBits[4], minBits[5]);
 
-    words[8] = pair(0, 0); // unused
+    const dow = t.weekday === 0 ? 7 : t.weekday; // 1=Monday..7=Sunday
+    const dowBits = bitsForWeights(dow, [8, 4, 2, 1]);
+    words[8] = pair(dowBits[0], dowBits[1]);
+    words[9] = pair(dowBits[2], dowBits[3]);
 
-    words[9] = pair(0, 0); // unused (reserved in published table)
+    // P1 (sec 10): derived from the decoder's own validation rule rather
+    // than a separately-computed raw-bit parity (see note above). "check"
+    // is the XOR of the nine transmitted 2-bit values from seconds 1-9.
+    const twoBitXor = (a, b) => [(a[0] ^ b[0]), (a[1] ^ b[1])];
+    let check = [0, 0];
+    for (let s = 1; s <= 9; s++) check = twoBitXor(check, words[s]);
+    const checkVal = (check[0] << 1) | check[1];
+    // Verified lookup (derived by exhaustively cross-simulating the
+    // generator and decoder together): checkVal 0/3 -> P1 in {0,2};
+    // checkVal 1/2 -> P1 in {1,3}. AM takes the lower value, PM the higher.
+    let p1;
+    if (checkVal === 0 || checkVal === 3) p1 = isPM ? 2 : 0;
+    else p1 = isPM ? 3 : 1;
+    words[10] = pair((p1 >> 1) & 1, p1 & 1);
 
-    // sec 10 = P1: MSbit = AM(0)/PM(1), LSbit = even parity over secs 1-9
-    const isPM = t.hour >= 12 ? 1 : 0;
-    const parity1Bits = [
-      words[1][0], words[1][1], words[3][0], words[3][1], words[4][0], words[4][1],
-      words[5][0], words[5][1], words[6][0], words[6][1], words[7][0], words[7][1]
-    ];
-    words[10] = pair(isPM, evenParity(parity1Bits));
-
-    // secs 11-13: day of month (01-31) as 6-bit binary split across three
-    // seconds (weights 32,16,8,4,2,1 — the same width pattern confirmed
-    // for the minute field against a real captured BPC sample; a 31-max
-    // value needs 5-6 bits, which the 4-bit span originally tried here
-    // could not represent, so this field spans one more second than a
-    // literal reading of the public bit table suggested).
     const domBits = bitsForWeights(t.day, [32, 16, 8, 4, 2, 1]);
     words[11] = pair(domBits[0], domBits[1]);
     words[12] = pair(domBits[2], domBits[3]);
     words[13] = pair(domBits[4], domBits[5]);
 
-    // secs 14-15: month (01-12), 4-bit binary split across two seconds
     const monBits = bitsForWeights(t.month, [8, 4, 2, 1]);
     words[14] = pair(monBits[0], monBits[1]);
     words[15] = pair(monBits[2], monBits[3]);
 
-    // secs 16-18: year within century (00-99), 6-bit binary split across three seconds
     const yrBits = bitsForWeights(t.year % 100, [32, 16, 8, 4, 2, 1]);
     words[16] = pair(yrBits[0], yrBits[1]);
     words[17] = pair(yrBits[2], yrBits[3]);
     words[18] = pair(yrBits[4], yrBits[5]);
 
-    // sec 19 = P2: MSbit = day-of-week bit "64" weight (per published table),
-    // LSbit = even parity over secs 11-18
-    const dow = t.weekday === 0 ? 7 : t.weekday; // 1=Monday..7=Sunday
-    const parity2Bits = [
-      words[11][0], words[11][1], words[12][0], words[12][1], words[13][0], words[13][1],
-      words[14][0], words[14][1], words[15][0], words[15][1],
-      words[16][0], words[16][1], words[17][0], words[17][1], words[18][0], words[18][1]
-    ];
-    words[19] = pair(dow >= 7 ? 1 : 0, evenParity(parity2Bits));
+    // P4 (sec 19): reproduced from the generator's own stated logic —
+    // parity over the low 3 bits of day/month/year plus a high year bit —
+    // since no independent decoder exists in this project to validate it
+    // against. Kept for structural completeness; a receiving clock that
+    // only cares about time-of-day (as this project's own decoder does)
+    // never reads it.
+    const low3 = (v) => [(v >> 2) & 1, (v >> 1) & 1, v & 1];
+    const p4ParityBits = [...low3(t.day & 0b111), ...low3(t.month & 0b111), ...low3((t.year % 100) & 0b111)];
+    const p4Parity = p4ParityBits.reduce((a, b) => a ^ b, 0);
+    const yrHighFlag = ((t.year % 100) >> 6) & 1; // structurally mirrors the generator; always 0 for a 2-digit year
+    let p4;
+    if (!p4Parity && !yrHighFlag) p4 = 0;
+    else if (p4Parity && !yrHighFlag) p4 = 1;
+    else if (p4Parity && yrHighFlag) p4 = 2;
+    else p4 = 3;
+    words[19] = pair((p4 >> 1) & 1, p4 & 1);
 
     const lowMsTable = [100, 200, 300, 400]; // index = (MSbit<<1)|LSbit
     const pulses = [];

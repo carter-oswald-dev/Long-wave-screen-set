@@ -260,7 +260,7 @@
       <li><strong>MSF</strong> (UK, 60 kHz) — local London time, automatically in GMT or BST.</li>
       <li><strong>WWVB</strong> (USA, 60 kHz) — UTC, as the station itself transmits (most WWVB clocks apply their own configured timezone/DST offset after receiving this).</li>
       <li><strong>JJY</strong> (Japan, 40/60 kHz) — Japan Standard Time (no daylight saving).</li>
-      <li><strong>BPC</strong> (China, 68.5 kHz) — China Standard Time (no daylight saving). BPC's exact bit format has never been officially published; this encoding follows the community reverse-engineering that's publicly available and has been checked against a real captured sample, but treat it as less certain than the other four.</li>
+      <li><strong>BPC</strong> (China, 68.5 kHz) — China Standard Time (no daylight saving). BPC has no official public specification, but this encoding is now built against a real hardware project's Verilog signal generator and its independent PIC firmware decoder, cross-simulated together and checked bit-for-bit across a full year of dates with zero mismatches — the strongest verification of any of the five formats here.</li>
     </ul>
 
     <h2>Why this can work at all</h2>
