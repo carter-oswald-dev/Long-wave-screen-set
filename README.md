@@ -35,47 +35,74 @@ Nothing else is needed.
 
 ## Accuracy notes
 
-- DCF77, MSF, WWVB, and JJY are encoded against publicly documented,
-  authoritative specifications (PTB, NPL/Ofcom successor docs, NIST
-  Special Publication 432, and NICT respectively) and have been checked
-  bit-for-bit against a full year of test dates, including both
-  Northern Hemisphere DST transitions.
-- BPC has no official public specification. It was first built from
-  community reverse-engineering (Wikipedia's BPC article) and checked
-  against one real captured sample, but that source turned out to be
-  ambiguous about field widths — it under-sized the hour and
-  day-of-month fields, which only showed up as failures once tested
-  against a wider range of times than the single sample covered.
-  It was later rebuilt entirely from a real hardware project someone
-  shared as a zip upload — **BPC_VFD_Clock**, which includes both a
-  Verilog signal *generator* (`bpc_gen.v`) and independent PIC firmware
-  that *receives and decodes* that same signal (`bpc.c`/`bpc.h`). Having both sides let the whole 20-second frame be
-  cross-checked rather than reverse-engineered from one sample: each
-  second turned out to carry a single 2-bit value (0-3) as one of four
-  pulse widths, not two independent bits as the earlier table
-  suggested, and simulating the generator and decoder together also
-  surfaced a real bug in the original project's own firmware — its
-  transmit-side AM/PM logic disagreed with its own receive-side check
-  for about half of all PM times. The BPC encoder here reproduces the
-  decoder's actual validation rule instead of the generator's
-  inconsistent one, and has since been checked against a full year of
-  hourly test dates with zero mismatches against a faithful port of
-  that real decoder — the strongest verification of any of the five
-  formats in this project.
-- Whether the flicker technique actually reaches a given clock depends
-  entirely on that screen and that clock's receiver — there's no way to
-  guarantee it in software. Try a few screen/clock distances and
-  orientations before concluding it won't work.
+DCF77, MSF, WWVB, and JJY are encoded against publicly documented,
+authoritative specifications (PTB, NPL/Ofcom successor docs, NIST
+Special Publication 432, and NICT respectively) and have been checked
+bit-for-bit against a full year of test dates, including both
+Northern Hemisphere DST transitions.
+
+BPC has no official public specification, and its implementation went
+through two rounds of fixes described below.
+
+Whether the flicker technique actually reaches a given clock depends
+entirely on that screen and that clock's receiver — there's no way to
+guarantee it in software. Try a few screen/clock distances and
+orientations before concluding it won't work.
+
+## BPC: what was wrong, and what fixed it
+
+**Round 1 — the original problem.** BPC (China, 68.5 kHz) has no
+official published specification anywhere. The first version of this
+app was built from a community reverse-engineered frame table (from
+Wikipedia's "BPC (time signal)" article) and cross-checked against one
+real captured BPC sample quoted in that article. That single sample
+matched, but a full sweep across a year of test times turned up
+failures: the hour field only had enough bits for values 0–15 and the
+day-of-month field only had enough for 0–15, so any hour past 15:00 or
+any day past the 15th of the month encoded wrong. The single sample
+happened to use small values for both, so it didn't expose the problem.
+
+**Round 2 — the fix, from a real hardware project.** The user then
+supplied a zip of **[BPC_VFD_Clock](https://github.com/Belief997/BPC_VFD_Clock)**,
+a hardware + firmware project (PCB design, an FPGA/Verilog BPC signal
+*generator*, and PIC firmware that *receives and decodes* that same
+signal). That project's two halves gave something no single reverse-engineered
+sample could: an independent transmitter and receiver for the same
+protocol, checkable against each other.
+
+Reading `Software/zybo_test/bpc_gen.v` (the generator) alongside
+`Software/micro_new/bpc.c` and `bpc.h` (the decoder) revealed the real
+frame structure is simpler than the earlier guess: each of BPC's 20
+seconds carries a single 2-bit value (0–3), sent as one of four pulse
+widths (100/200/300/400 ms) — not two independent bits per second.
+Rebuilding the encoder against this structure fixed the original
+hour/day-of-month width bugs (hour is 12-hour format, 0–11, with a
+separate AM/PM flag; day-of-month gets a full 6-bit field).
+
+Simulating the generator and the decoder *together* — feeding the
+generator's output into the decoder's own validation logic, in code,
+across every hour and minute — also surfaced a bug in the original
+hardware project itself: its transmit side computes the AM/PM +
+parity byte one way, but its receive side checks a related-but-different
+quantity, and for about half of all PM times the two disagree, so the
+real firmware would have rejected its own generator's signal. The
+encoder here reproduces the *decoder's* validation rule (since that's
+what a real receiving clock enforces) rather than the generator's
+inconsistent one.
+
+**Result:** the BPC encoder was re-verified against a faithful port of
+the real PIC decoder's logic across a full year of hourly test dates —
+8,760 checks — with zero mismatches. That's now the most rigorously
+checked of the five protocols in this app, because it's the only one
+validated against another party's independent, working receiver code
+rather than a specification document.
 
 ## Credits
 
 - The screen-flicker technique itself is adapted from a 2003 CRT-era
   tool for DCF77 (`dcf77.c`), which used the same idea of flashing a
   monitor to leak enough EMI/optical signal for a nearby clock to read.
-- The BPC protocol implementation is built directly from **BPC_VFD_Clock**,
-  a hardware + firmware project (PCB design, Verilog BPC signal
-  generator, and PIC receiver/decoder firmware) shared as a zip upload.
-  Its generator and decoder, read together, are what corrected this
-  app's BPC encoding from an under-specified guess into something
-  verified against real, independent receiver logic.
-
+- The BPC protocol implementation is built from
+  [BPC_VFD_Clock](https://github.com/Belief997/BPC_VFD_Clock) by
+  Belief997 — see the "BPC: what was wrong, and what fixed it" section
+  above for exactly how it was used.
